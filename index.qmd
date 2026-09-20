@@ -1,0 +1,84 @@
+---
+title: "Christopher Orellana"
+---
+
+## About Me
+
+::: {.columns}
+
+::: {.column width="40%"}
+![](images/Data_scientist.jpg){width=300}
+:::
+
+::: {.column width="30%"}
+
+Hi, I'm Christopher Orellana. I'm currently pursuing an M.S. in Data Analytics at Baruch College while working as a Platform/AI Engineer. My work involves cloud and data platforms, automation, and supporting scalable technical systems. I'm especially interested in machine learning, computer vision, robotics, and autonomous systems.
+:::
+
+:::
+
+Links:
+
+You can find some of my projects on my [GitHub](https://github.com/christopher-orellana).\
+Also see my [LinkedIn](https://www.linkedin.com/in/christopher-orellana/)
+
+Current Interests:
+
+- Cloud and platform engineering
+- Machine learning
+- Computer vision
+- Robotics and autonomous systems
+- Data engineering and automation
+
+Some of my projects:
+
+- NASA Turbofan RUL Prediction:\
+Built a machine learning project using NASA turbofan engine data to predict the remaining useful life of aircraft engines.
+
+- CyberThreatNLP:\
+Built an end-to-end analytics pipeline that ingests unstructured cybersecurity news, transforms it into structured threat intelligence, and delivers downstream analytics outputs for monitoring and prioritization.
+
+AI & Platform Engineering
+
+I currently work as a plaform/AI Engineer with cloud-based data platforms, AI enabled automation, access management, and production systems.
+
+AI and Autonomous Systems
+
+I'm continuing to develop my skills in machine learning and computer vision with the long-term goal of working on perception systems for robotics and autonomous technology.
+
+Education:
+
+Baruch College
+M.S. in Data Analytics
+
+Baruch College
+B.B.A. in Marketing Management
+Minor in Economics and Finance
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+if(!require("leaflet")){
+    options(repos=c(CRAN="https://cloud.r-project.org"))
+    install.packages("leaflet")
+    stopifnot(require("leaflet"))
+}
+
+baruch_longitude <- -73.98333
+baruch_latitude  <- +40.74028
+
+leaflet() |>
+  addTiles() |>
+  setView(baruch_longitude, baruch_latitude, zoom=17) |>
+  addPopups(baruch_longitude, baruch_latitude, 
+            "I am a Master's student at <b>Baruch College</b>!")
+```
+
+```{r}
+#| include: false
+1+1
+```
+--------------
+Last Updated: `r format(Sys.time(), "%A %m %d, %Y at %H:%M%p")`
