@@ -10,7 +10,7 @@ format:
     code-fold: true
     code-summary: "Show reproducible R code"
     code-tools: false
-    embed-resources: true
+    embed-resources: false
     fig-width: 10
     fig-height: 6
     fig-dpi: 160
