@@ -2,6 +2,13 @@
 title: "Christopher Orellana"
 ---
 
+## Course Projects
+
+- [MP01 - Netflix Viewing Data](mp01.html)
+- [MP02 - The Green Transit Awards](mp02.html)
+- [MP03 - Where My People At?](mp03.html)
+- [MP04 - Coming soon](mp04.html)
+
 ## About Me
 
 ::: {.columns}
