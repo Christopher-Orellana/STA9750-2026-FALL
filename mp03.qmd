@@ -1,6 +1,621 @@
 ---
-title: "Mini-Project Placeholder"
+title: "Where My People At?"
+subtitle: "Hispanic and Latino communities in New York City and across the U.S."
+author: "Christopher Orellana"
+date: "2026-11-26"
+format:
+  html:
+    theme: cyborg
+    toc: true
+    toc-location: right
+    toc-depth: 2
+    toc-title: "In this report"
+    code-fold: true
+    code-summary: "Show R code"
+    code-tools: false
+    embed-resources: false
+    fig-width: 9
+    fig-height: 6
+    fig-dpi: 160
+    include-in-header:
+      text: |
+        <style>
+        body { background: #10121e; color: #e4e8f1; font-family: Arial, sans-serif; line-height: 1.7; }
+        h1, h2, h3 { font-weight: 600; }
+        h1 { color: #e4e8f1; font-size: 2.2rem; }
+        h2 { color: #66e2e5; font-size: 1.5rem; margin-top: 2.2rem; }
+        h3 { color: #d6dbee; font-size: 1.15rem; }
+        a, details > summary { color: #66e2e5; }
+        a:hover { color: #e6a0d5; }
+        .subtitle, .figure-caption { color: #adb8cc; }
+        #TOC { border-left: 1px solid #394052; padding-left: 1rem; }
+        #TOC .nav-link.active { color: #66e2e5; border-left-color: #e6a0d5; }
+        pre, div.sourceCode { background: #191d2d; }
+        .gt_table { margin-bottom: 1.5rem; }
+        @media print { body { background: white; color: black; } }
+        </style>
+execute:
+  echo: true
+  warning: false
+  message: false
+  cache: false
 ---
 
-This is a placeholder for STA9750 Mini-Project 3. Check back soon for more!
+This report looks at where Hispanic and Latino people live in New York City and across the United States. It also looks at how the number of residents compares with the amount of housing in NYC.
 
+I use the 2020-2024 American Community Survey (ACS), following the assignment's five-year fallback because the newer one-year data had missing values. Hispanic or Latino people can be of any race.
+
+A census tract is a small area used to count and describe residents. An NTA is a neighborhood area defined by NYC. A metro area includes a city and nearby communities connected to it.
+
+
+
+## Task 0: Data Acquisition - Census API Key
+
+I set up an access key so R could request data from the Census Bureau. I also loaded the tools used in this report and set up a folder for the downloaded files.
+
+I installed the Census key once with `tidycensus::census_api_key(..., install = TRUE)` and kept it outside this report. The code below downloads the assigned Census, NYC neighborhood, and PLUTO building data. It saves the files so later runs do not download them again.
+
+```{r}
+#| label: setup
+#| results: hide
+library(tidyverse)
+library(tidycensus)
+library(sf)
+library(httr2)
+library(gt)
+library(ggiraph)
+library(patchwork)
+
+data_dir <- file.path("data", "mp03")
+dir.create(data_dir, recursive = TRUE, showWarnings = FALSE)
+options(tigris_use_cache = TRUE)
+Sys.setenv(TIGRIS_CACHE_DIR = file.path(normalizePath(data_dir), "tigris"))
+
+# Keep the key in R's environment, not in this report.
+if (Sys.getenv("CENSUS_API_KEY") == "" && file.exists(path.expand("~/.Renviron"))) {
+  readRenviron(path.expand("~/.Renviron"))
+}
+
+acs5_year <- 2024
+pop_vars <- c(total = "B01003_001", hispanic = "B03001_003")
+origin_vars <- c(
+  Mexican = "B03001_004", `Puerto Rican` = "B03001_005",
+  Cuban = "B03001_006", Dominican = "B03001_007",
+  `Central American` = "B03001_008", `South American` = "B03001_016",
+  `Other Hispanic or Latino` = "B03001_027"
+)
+boroughs <- tribble(
+  ~county, ~boro, ~borough,
+  "005", "2", "Bronx", "047", "3", "Brooklyn",
+  "061", "1", "Manhattan", "081", "4", "Queens",
+  "085", "5", "Staten Island"
+)
+
+cyan <- "#66e2e5"
+pink <- "#e6a0d5"
+ink <- "#10121e"
+knitr::opts_chunk$set(dev.args = list(bg = ink))
+fmt <- function(x, digits = 0) scales::number(x, accuracy = 10^-digits, big.mark = ",")
+pct <- function(x) scales::percent(x, accuracy = 0.1)
+theme_set(theme_minimal(base_size = 12) + theme(
+  text = element_text(color = "#e4e8f1"),
+  plot.title = element_text(size = 15, face = "bold"),
+  plot.subtitle = element_text(color = "#adb8cc", margin = margin(b = 10)),
+  axis.text = element_text(color = "#c0cadc"),
+  strip.text = element_text(color = "#c0cadc"),
+  plot.background = element_rect(fill = ink, color = NA),
+  panel.background = element_rect(fill = ink, color = NA),
+  legend.background = element_rect(fill = ink, color = NA),
+  legend.key = element_rect(fill = ink, color = NA),
+  panel.grid.major = element_line(color = "#30354a", linewidth = 0.3),
+  panel.grid.minor = element_blank(),
+  plot.margin = margin(12, 20, 12, 12), legend.position = "bottom"
+))
+update_geom_defaults("text", list(colour = "#e4e8f1"))
+table_style <- function(data, title) {
+  gt(data) |> tab_header(title = title) |> tab_options(
+    table.font.size = px(13), table.width = gt::pct(100),
+    table.background.color = "#191d2d", table.font.color = "#e4e8f1",
+    heading.background.color = "#191d2d", heading.align = "left",
+    column_labels.background.color = "#252b41",
+    column_labels.border.bottom.color = "#3f4760",
+    table.border.top.color = "#3f4760", table.border.bottom.color = "#3f4760",
+    table_body.hlines.color = "#30354a"
+  )
+}
+map_theme <- theme(
+  axis.title = element_blank(), axis.text = element_blank(),
+  axis.ticks = element_blank(), panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(), legend.title.position = "top"
+)
+```
+
+
+## Task 1: Data Acquisition - CBSA Population Breakdown
+
+I downloaded the total population and Hispanic population for metro areas across the country, along with their map boundaries. I saved these files so I can compare places without downloading the same data again.
+
+```{r}
+#| label: cbsa-download
+#| results: hide
+# Save Census numbers as CSV and boundaries as a shapefile.
+cached_acs <- function(name, ..., spatial = FALSE) {
+  csv <- file.path(data_dir, paste0(name, ".csv"))
+  shape_dir <- file.path(data_dir, paste0(name, "_geometry"))
+  shape <- file.path(shape_dir, "geometry.shp")
+  ready <- file.exists(csv) && (!spatial || file.exists(shape))
+  if (!ready) {
+    if (Sys.getenv("CENSUS_API_KEY") == "") {
+      stop("Complete Task 0: install and activate your Census API key, then restart R.")
+    }
+    result <- get_acs(..., geometry = spatial, output = "wide")
+    if (spatial) {
+      dir.create(shape_dir, recursive = TRUE, showWarnings = FALSE)
+      st_write(result |> select(GEOID), shape, delete_layer = TRUE, quiet = TRUE)
+      result <- st_drop_geometry(result)
+    }
+    write_csv(result, csv)
+  }
+  result <- read_csv(csv, col_types = cols(GEOID = col_character()), show_col_types = FALSE)
+  if (spatial) {
+    result <- st_read(shape, quiet = TRUE) |>
+      left_join(result, by = "GEOID", relationship = "one-to-one")
+  }
+  result
+}
+
+
+
+# Tasks 1, 2, 3, and 5: use only the assigned Census and NYC data.
+cbsa <- cached_acs("cbsa_2024_acs5", geography = "cbsa", variables = pop_vars,
+                   year = acs5_year, survey = "acs5", spatial = TRUE)
+```
+
+
+## Task 2: Data Acquisition - NYC Tract Population Breakdown
+
+I downloaded population estimates for small Census areas called tracts in all five NYC boroughs. I also saved their map boundaries so I can show where people live within the city.
+
+```{r}
+#| label: tract-download
+#| results: hide
+tracts <- cached_acs("nyc_tracts_2024_acs5", geography = "tract", variables = pop_vars,
+                     state = "NY", county = boroughs$county,
+                     year = acs5_year, survey = "acs5", spatial = TRUE)
+```
+
+
+## Task 3: Data Acquisition - NYC NTAs
+
+I downloaded NYC's neighborhood map directly from the city website and opened it in R. These neighborhood areas are called NTAs. Their names make the results easier to understand than tract numbers alone.
+
+```{r}
+#| label: nta-download
+#| results: hide
+load_nyc_nta <- function() {
+  dir.create(data_dir, recursive = TRUE, showWarnings = FALSE)
+  zip_path <- file.path(data_dir, "nynta2020_26d.zip")
+  shape_dir <- file.path(data_dir, "nta")
+  if (!file.exists(zip_path)) {
+    url <- paste0("https://s-media.nyc.gov/agencies/dcp/assets/files/zip/",
+                  "data-tools/bytes/neighborhood-tabulation-areas/nynta2020_26d.zip")
+    response <- request(url) |> req_retry(max_tries = 3) |> req_perform()
+    writeBin(resp_body_raw(response), zip_path)
+  }
+  shapes <- list.files(shape_dir, pattern = "\\.shp$", recursive = TRUE, full.names = TRUE)
+  if (length(shapes) == 0) {
+    unzip(zip_path, exdir = shape_dir)
+    shapes <- list.files(shape_dir, pattern = "\\.shp$", recursive = TRUE, full.names = TRUE)
+  }
+  stopifnot(length(shapes) == 1)
+  st_read(shapes, quiet = TRUE) |>
+    select(NTA2020, NTAName, BoroName, NTAType) |>
+    st_transform(2263) |> st_make_valid()
+}
+
+
+
+nta <- load_nyc_nta()
+```
+
+
+## Task 4: Aggregate Tract Data to the NTA Level
+
+I matched each Census tract to the neighborhood it overlaps the most. Then I added up the residents in those tracts to estimate each neighborhood's total and Hispanic population.
+
+```{r}
+#| label: tract-to-nta
+#| results: hide
+# Keep Census missing-value codes out of percentages and rankings.
+clean_estimates <- function(data) {
+  data |> mutate(across(matches("^(total|hispanic)[EM]$"), ~ if_else(.x < 0, NA_real_, .x)))
+}
+cbsa <- clean_estimates(cbsa)
+tracts <- clean_estimates(tracts) |> st_transform(2263) |> st_make_valid() |>
+  mutate(county = substr(GEOID, 3, 5)) |>
+  left_join(boroughs, by = "county", relationship = "many-to-one") |>
+  mutate(bct2020 = paste0(boro, substr(GEOID, 6, 11)))
+stopifnot(!anyDuplicated(tracts$GEOID), !anyDuplicated(tracts$bct2020),
+          !anyNA(tracts$boro), all(tracts$hispanicE <= tracts$totalE, na.rm = TRUE))
+
+# Task 4: assign each tract to its largest overlapping neighborhood.
+tract_nta <- st_join(tracts, nta |> select(NTA2020, NTAName),
+                     join = st_intersects, largest = TRUE, left = TRUE)
+stopifnot(nrow(tract_nta) == nrow(tracts), !anyDuplicated(tract_nta$GEOID))
+missing_nta <- tract_nta |> filter(is.na(NTA2020))
+stopifnot(!any(missing_nta$totalE > 0, na.rm = TRUE))
+nta_population <- tract_nta |> st_drop_geometry() |>
+  filter(!is.na(NTA2020)) |> group_by(NTA2020) |>
+  summarise(total = sum(totalE), hispanic = sum(hispanicE), .groups = "drop")
+nta_people <- nta |>
+  left_join(nta_population, by = "NTA2020", relationship = "one-to-one") |>
+  mutate(share = if_else(total > 0, hispanic / total, NA_real_))
+stopifnot(sum(nta_population$total, na.rm = TRUE) == sum(tracts$totalE, na.rm = TRUE))
+```
+
+
+## Task 5: Download PLUTO
+
+I downloaded PLUTO, NYC's building and property data, in smaller batches until I had the full file. I combined and saved the batches so I could compare housing, office space, and building heights.
+
+```{r}
+#| label: pluto-download
+#| results: hide
+load_pluto <- function() {
+  csv <- file.path(data_dir, "pluto.csv")
+  types <- cols(.default = col_double(), bbl = col_character(),
+                bct2020 = col_character(), version = col_character())
+  if (!file.exists(csv)) {
+    endpoint <- "https://data.cityofnewyork.us/resource/64uk-42ks.csv"
+    columns <- paste(c("bbl", "borocode", "bct2020", "resarea", "unitsres",
+                       "officearea", "comarea", "bldgarea", "numfloors", "version"), collapse = ",")
+    page_size <- 50000
+    offset <- 0
+    pages <- list()
+    # Check the row count so a short download cannot pass as the full file.
+    before <- request(endpoint) |> req_url_query(`$select` = "count(*)") |>
+      req_retry(max_tries = 3) |> req_perform() |> resp_body_string() |>
+      read_csv(show_col_types = FALSE) |> pull(1)
+    repeat {
+      response <- request(endpoint) |>
+        req_url_query(`$select` = columns, `$order` = "bbl",
+                      `$limit` = page_size, `$offset` = offset) |>
+        req_timeout(120) |> req_retry(max_tries = 4) |> req_perform()
+      page <- read_csv(I(resp_body_string(response)), col_types = types,
+                       show_col_types = FALSE)
+      pages[[length(pages) + 1]] <- page
+      message("PLUTO rows downloaded: ", offset + nrow(page))
+      if (nrow(page) < page_size) break
+      offset <- offset + page_size
+    }
+    result <- bind_rows(pages)
+    stopifnot(nrow(result) == before, !anyDuplicated(result$bbl))
+    write_csv(result, csv)
+  }
+  read_csv(csv, col_types = types, show_col_types = FALSE)
+}
+
+pluto <- load_pluto()
+```
+
+
+## Task 6: Exploratory Data Analysis
+
+I combined the population and building data to answer the assignment's questions. I compared places using counts and percentages, looked at housing and office space, and explained unusual values that could make the results misleading.
+
+```{r}
+#| label: additional-census-data
+#| results: hide
+us_2024 <- cached_acs("us_2024_acs5", geography = "us", variables = pop_vars,
+                      year = acs5_year, survey = "acs5")
+ny_state <- cached_acs("ny_state_2024_acs5", geography = "state", state = "NY",
+                       variables = pop_vars, year = acs5_year, survey = "acs5")
+nyc_origins <- cached_acs("nyc_origins_2024_acs5", geography = "county", state = "NY",
+                         county = boroughs$county, variables = origin_vars,
+                         year = acs5_year, survey = "acs5")
+```
+
+```{r}
+#| label: join-and-analyze
+#| results: hide
+# Add up tax lots within each tract before joining them to Census estimates.
+sum_known <- function(x) if (all(is.na(x))) NA_real_ else sum(x, na.rm = TRUE)
+max_known <- function(x) if (all(is.na(x))) NA_real_ else max(x, na.rm = TRUE)
+area_columns <- c("resarea", "unitsres", "officearea", "comarea", "bldgarea", "numfloors")
+stopifnot(!anyDuplicated(pluto$bbl),
+          all(as.matrix(select(pluto, all_of(area_columns))) >= 0, na.rm = TRUE))
+pluto_tract <- pluto |> filter(!is.na(bct2020), nchar(bct2020) == 7) |>
+  group_by(bct2020) |>
+  summarise(lots = n(), office_sqft = sum(replace_na(officearea, 0)),
+            residential_sqft = sum_known(resarea), units = sum_known(unitsres),
+            commercial_sqft = sum_known(comarea), building_sqft = sum_known(bldgarea),
+            max_floors = max_known(numfloors), .groups = "drop")
+unmatched_pluto <- pluto_tract |>
+  anti_join(st_drop_geometry(tracts), by = "bct2020")
+tract_data <- tract_nta |>
+  left_join(pluto_tract, by = "bct2020", relationship = "one-to-one") |>
+  mutate(
+    people_1000sqft = if_else(residential_sqft > 0, totalE / residential_sqft * 1000, NA_real_),
+    people_unit = if_else(units > 0, totalE / units, NA_real_),
+    commercial_share = if_else(building_sqft > 0, commercial_sqft / building_sqft, NA_real_),
+    primarily_commercial = !is.na(commercial_share) &
+      between(commercial_share, 0.75, 1)
+  )
+tract_labels <- tract_data |> st_drop_geometry() |>
+  transmute(bct2020, GEOID, borough, NTAName, NTA2020,
+            tract_name = paste0("Tract ", substr(GEOID, 6, 11), ", ", borough))
+office_winner <- pluto_tract |> arrange(desc(office_sqft), bct2020) |>
+  slice_head(n = 1) |> left_join(tract_labels, by = "bct2020")
+nta_housing <- tract_data |> st_drop_geometry() |>
+  filter(!is.na(NTA2020)) |> group_by(NTA2020, NTAName) |>
+  summarise(units = sum_known(units), max_floors = max_known(max_floors),
+            .groups = "drop")
+unit_winner <- nta_housing |> arrange(desc(units), NTA2020) |> slice_head(n = 1)
+density_area <- tract_data |> st_drop_geometry() |>
+  filter(is.finite(people_1000sqft), totalE > 0) |>
+  arrange(desc(people_1000sqft), GEOID) |> slice_head(n = 1)
+density_units <- tract_data |> st_drop_geometry() |>
+  filter(is.finite(people_unit), totalE > 0) |>
+  arrange(desc(people_unit), GEOID) |> slice_head(n = 1)
+
+# Only metropolitan areas in the 50 states and DC enter the U.S. comparison.
+# Puerto Rico is outside the denominator of geography = "us".
+metros <- cbsa |>
+  filter(str_detect(NAME, "Metro Area"), !str_detect(NAME, ", PR "),
+         totalE > 0, !is.na(hispanicE)) |>
+  mutate(share = hispanicE / totalE,
+         metro = str_remove(NAME, " Metro Area$"),
+         us_share = hispanicE / us_2024$hispanicE)
+ny_metro <- metros |> filter(GEOID == "35620")
+top_metros <- metros |> st_drop_geometry() |> filter(GEOID != "35620") |>
+  arrange(desc(share), GEOID) |> slice_head(n = 5)
+largest_metros <- metros |> st_drop_geometry() |>
+  arrange(desc(hispanicE), GEOID) |> slice_head(n = 5)
+stopifnot(nrow(ny_metro) == 1, nrow(top_metros) == 5,
+          all(between(metros$share, 0, 1)), all(metros$hispanicE <= us_2024$hispanicE))
+
+# Task 6 asks for a city in one of the five high-share metro areas.
+stopifnot(any(str_detect(top_metros$NAME, "Laredo")))
+texas_places <- cached_acs("texas_places_origins_2024_acs5", geography = "place", state = "TX",
+                          variables = c(pop_vars, origin_vars, `Not Hispanic or Latino` = "B03001_002"),
+                          year = acs5_year, survey = "acs5")
+laredo <- texas_places |> filter(NAME == "Laredo city, Texas")
+stopifnot(nrow(laredo) == 1)
+city_origins <- laredo |>
+  select(all_of(paste0(c(names(origin_vars), "Not Hispanic or Latino"), "E"))) |>
+  pivot_longer(everything(), names_to = "origin", values_to = "people") |>
+  mutate(origin = str_remove(origin, "E$"), share = people / laredo$totalE)
+stopifnot(sum(city_origins$people) == laredo$totalE)
+nyc_origin_totals <- nyc_origins |>
+  summarise(across(all_of(paste0(names(origin_vars), "E")), sum)) |>
+  pivot_longer(everything(), names_to = "origin", values_to = "people") |>
+  mutate(origin = str_remove(origin, "E$")) |> arrange(desc(people))
+
+# Keep residential neighborhoods in the community rankings.
+neighborhoods <- nta_people |> st_drop_geometry() |>
+  filter(NTAType == "0", total > 0, !is.na(hispanic))
+top_nta <- neighborhoods |> arrange(desc(share), NTA2020) |> slice_head(n = 5)
+largest_nta <- neighborhoods |> arrange(desc(hispanic), NTA2020) |> slice_head(n = 1)
+nyc_total <- sum(tracts$totalE, na.rm = TRUE)
+nyc_hispanic <- sum(tracts$hispanicE, na.rm = TRUE)
+nyc_share <- nyc_hispanic / nyc_total
+commercial_population <- sum(tract_data$totalE[tract_data$primarily_commercial], na.rm = TRUE)
+commercial_tracts <- sum(tract_data$primarily_commercial)
+unknown_commercial_population <- tract_data |>
+  filter(is.na(commercial_share) | commercial_share > 1) |>
+  st_drop_geometry() |> summarise(people = sum(totalE, na.rm = TRUE)) |> pull(people)
+housing_pairs <- tract_data |> st_drop_geometry() |>
+  filter(is.finite(totalE), units > 0, is.finite(units))
+housing_correlation <- cor(housing_pairs$totalE, housing_pairs$units)
+highest_nta <- nta_housing |> filter(is.finite(max_floors)) |>
+  arrange(desc(max_floors), NTA2020) |> slice_head(n = 5)
+```
+
+I assign each tract to the neighborhood it overlaps the most, then add up its residents. I group PLUTO lots by tract before joining them to the Census data. The download has `r fmt(nrow(pluto))` lots. Of these, `r fmt(sum(is.na(pluto$bct2020) | nchar(pluto$bct2020) != 7))` have no usable tract ID and are left out of the location comparisons. The remaining tract IDs match, and the neighborhood population totals add back to the city total.
+
+Missing office space is counted as zero, as the guide allows. Other missing values are not treated as known counts. I only divide by values above zero. The Census data cover 2020-2024, while the NYC files are from 2026, so the population and building records may not line up perfectly. Census numbers are estimates, so small ranking differences may not be meaningful.
+
+### Comparing places
+
+The first table shows the highest Hispanic percentages outside the New York metro. I compare metros in the 50 states and DC. Puerto Rico is excluded because it is outside the U.S. population total used here. Smaller areas called micropolitan areas are also excluded.
+
+```{r}
+#| label: metro-table
+top_metros |>
+  transmute(`Metro area` = metro, Residents = totalE,
+            `Hispanic residents` = hispanicE, `Hispanic percentage` = share) |>
+  table_style("Five metros with the highest Hispanic percentages") |>
+  fmt_number(columns = c(Residents, `Hispanic residents`), decimals = 0) |>
+  fmt_percent(columns = `Hispanic percentage`, decimals = 1)
+```
+
+This next table covers Laredo city, not the whole metro. Each percentage is out of all `r fmt(laredo$totalE)` city residents. These are Hispanic-origin groups, not races. Non-Hispanic residents are included so everyone is counted. Very small percentages may round to 0.0%.
+
+```{r}
+#| label: city-origin-table
+city_origins |>
+  arrange(desc(people)) |>
+  transmute(Background = origin, Residents = people, `City percentage` = share) |>
+  table_style("Laredo city: residents by background") |>
+  fmt_number(columns = Residents, decimals = 0) |>
+  fmt_percent(columns = `City percentage`, decimals = 1)
+```
+
+The country has `r fmt(us_2024$hispanicE)` Hispanic residents. Of that group, `r pct(nyc_hispanic / us_2024$hispanicE)` live in NYC, `r pct(ny_state$hispanicE / us_2024$hispanicE)` live in New York State, and `r pct(ny_metro$us_share)` live in the New York metro. These places overlap, and the metro crosses state lines, so do not add these percentages together. The table below shows the five largest Hispanic metro populations and their percentages of the national Hispanic total.
+
+```{r}
+#| label: national-share-table
+largest_metros |>
+  transmute(`Metro area` = metro, `Hispanic residents` = hispanicE,
+            `% of U.S. Hispanic residents` = us_share) |>
+  table_style("Where the largest Hispanic metro populations live") |>
+  fmt_number(columns = `Hispanic residents`, decimals = 0) |>
+  fmt_percent(columns = `% of U.S. Hispanic residents`, decimals = 1)
+```
+
+### Buildings and housing in NYC
+
+#### Office space, homes, and height
+
+`r office_winner$tract_name` (ID `r office_winner$GEOID`), in `r office_winner$NTAName`, has the most office space: `r fmt(office_winner$office_sqft)` square feet. The neighborhood with the most homes is `r unit_winner$NTAName`, with `r fmt(unit_winner$units)` residential units. A residential unit means one separate home, such as an apartment.
+
+For building height, I use the highest recorded number of floors in each neighborhood.
+
+```{r}
+#| label: tallest-table
+highest_nta |>
+  transmute(Neighborhood = NTAName, `Highest recorded floor count` = max_floors) |>
+  table_style("Neighborhoods with the tallest recorded buildings") |>
+  fmt_number(columns = `Highest recorded floor count`, decimals = 1)
+```
+
+The first value, `r fmt(highest_nta$max_floors[1], 1)` floors in `r highest_nta$NTAName[1]`, looks like a data error. It is shown because it is in the file, but it is not a verified building height. The next two values are 104 and 102 floors.
+
+#### How many people share the available housing?
+
+Tract `r density_area$GEOID`, in `r density_area$NTAName`, `r density_area$borough`, has the most residents per square foot of recorded housing. It has `r fmt(density_area$totalE)` residents and `r fmt(density_area$residential_sqft)` residential square feet. That works out to `r fmt(density_area$people_1000sqft / 1000, 3)` residents per square foot, or `r fmt(density_area$people_1000sqft, 1)` per 1,000 square feet.
+
+The same tract also has the most residents per recorded home: `r fmt(density_units$people_unit, 1)`. Only `r fmt(density_units$units)` homes are recorded there. This does not mean that hundreds of people share each apartment. Census counts can include people in places like dorms or institutions, and the building records may use different categories or dates. These files do not tell us the exact reason for this mismatch.
+
+Across the city, areas with more homes usually have more residents. The correlation is `r fmt(housing_correlation, 2)` on a scale from -1 to 1, showing a fairly strong positive relationship. The pattern is roughly linear, but it is not exact: homes can have different numbers of residents or be empty.
+
+#### People living in commercial areas
+
+I call a tract mainly commercial when at least 75% of its building floor space is commercial space. Under that definition, `r fmt(commercial_population)` residents live in `r fmt(commercial_tracts)` mainly commercial tracts. That is `r pct(commercial_population / nyc_total)` of NYC residents. It does not mean they live inside offices; their homes are in areas with mostly commercial space.
+
+Tracts with missing values or commercial percentages above 100% are left out of this classification. They contain `r fmt(unknown_commercial_population)` residents. A different cutoff would change the answer.
+
+
+## Task 7: Atlas of American Communities Entry
+
+I turned the results into a short story about Hispanic and Latino communities in NYC and across the country. The maps and numbers show where these communities live and how the places compare.
+
+### New York City
+
+For a visitor learning about Hispanic New York, the neighborhoods are a good place to start. The city has an estimated `r fmt(nyc_hispanic)` Hispanic or Latino residents. That is `r pct(nyc_share)` of everyone in the five boroughs, or about 29 out of every 100 residents. The map below shows where that percentage is higher and lower. Each small shape is a neighborhood, and brighter blue means a higher Hispanic percentage.
+
+North Corona in Queens has the highest percentage among residential neighborhoods: `r pct(top_nta$share[top_nta$NTAName == "North Corona"])`. University Heights (North)-Fordham and Fordham Heights in the Bronx also rank near the top. The neighborhood with the most Hispanic residents is `r largest_nta$NTAName`, with `r fmt(largest_nta$hispanic)` people. These are two different questions. A neighborhood can have more Hispanic residents overall but a lower Hispanic percentage because its total population is larger.
+
+The Hispanic category also has a history. The Census added a Hispanic-origin question to a sample form in 1970 and asked everyone in 1980. Today, the category includes people with many different backgrounds. In NYC, Dominican origin accounts for `r fmt(nyc_origin_totals$people[nyc_origin_totals$origin == "Dominican"])` residents, and Puerto Rican origin accounts for `r fmt(nyc_origin_totals$people[nyc_origin_totals$origin == "Puerto Rican"])`. These are the two largest groups in the broad origin categories used here. Mexican, Cuban, Central American, South American, and other Hispanic backgrounds are also part of the city.
+
+```{r}
+#| label: fig-nyc-community
+#| fig-alt: "Map of NYC neighborhoods, with borough names labeled. Brighter blue means a higher percentage of residents are Hispanic or Latino."
+# Use the existing neighborhood shapes to outline and label the boroughs.
+borough_shapes <- nta |> group_by(BoroName) |> summarise()
+borough_labels <- st_point_on_surface(borough_shapes)
+
+ggplot(nta_people) +
+  geom_sf(aes(fill = share), color = ink, linewidth = 0.1) +
+  geom_sf(data = borough_shapes, fill = NA, color = "#aeb6ca", linewidth = 0.3) +
+  geom_sf_label(data = borough_labels, aes(label = BoroName),
+                fill = ink, color = "white", size = 3, label.size = 0) +
+  scale_fill_gradient(low = "#282d49", high = cyan, limits = c(0, 1),
+                      breaks = c(0, 0.5, 1), labels = scales::label_percent(),
+                      na.value = "#666977", name = "% of residents who are Hispanic") +
+  labs(title = "Where Hispanic residents live in NYC",
+       subtitle = "Each area is a neighborhood | Gray = no estimate") +
+  map_theme
+```
+
+### Across the United States
+
+Outside the New York metro, the five metros with the highest Hispanic percentages are Laredo, Eagle Pass, McAllen-Edinburg-Mission, Brownsville-Harlingen, and El Centro. Four are in Texas and one is in California. Laredo leads at `r pct(top_metros$share[1])`. The map shows that these high percentages are concentrated near the southern border.
+
+New York still has a large Hispanic community. Its metro area has `r fmt(ny_metro$hispanicE)` Hispanic residents, or `r pct(ny_metro$us_share)` of the country's Hispanic population. But Hispanic residents make up only `r pct(ny_metro$share)` of the metro's own population. This is another example of why a large number and a high percentage are not the same thing.
+
+For a closer look outside NYC, I chose Laredo city. Mexican origin makes up `r pct(city_origins$share[city_origins$origin == "Mexican"])` of its residents. That is different from NYC's mix of backgrounds. For someone exploring these communities, the main point is simple: Hispanic and Latino people live across the country, but each place has its own population pattern. A map can help us find these communities without assuming that everyone in them has the same background or experience.
+
+```{r}
+#| label: fig-us-community
+#| fig-height: 5.8
+#| fig-alt: "Map of metro areas in the lower 48 states. Laredo, Texas; El Centro, California; and the New York metro are labeled. Brighter blue means a higher Hispanic percentage."
+metro_map <- metros |>
+  filter(!str_detect(NAME, ", (AK|HI) Metro Area$")) |>
+  st_transform(5070) |> st_simplify(dTolerance = 1000, preserveTopology = TRUE)
+metro_labels <- metro_map |>
+  filter(GEOID %in% c("29700", "20940", "35620")) |>
+  mutate(place = case_when(
+    GEOID == "29700" ~ "Laredo, TX",
+    GEOID == "20940" ~ "El Centro, CA",
+    TRUE ~ "New York metro"
+  )) |> st_point_on_surface()
+
+ggplot(metro_map) +
+  geom_sf(aes(fill = share), color = "#454b60", linewidth = 0.12) +
+  geom_sf_label(data = metro_labels, aes(label = place),
+                fill = ink, color = "white", size = 3, label.size = 0) +
+  scale_fill_gradient(low = "#282d49", high = cyan, limits = c(0, 1),
+                      breaks = c(0, 0.5, 1), labels = scales::label_percent(),
+                      name = "% of residents who are Hispanic") +
+  labs(title = "Hispanic residents across U.S. metro areas",
+       subtitle = "Lower 48 states | Each colored shape is a metro area") +
+  map_theme
+```
+
+Blank spaces are outside metro areas; they do not mean that nobody lives there. Alaska and Hawaii are included in the comparisons but are not shown on this map.
+
+### What I learned
+
+Hispanic communities look different from place to place. NYC has a large Hispanic population, while some smaller metros have much higher Hispanic percentages. Within NYC, more homes usually go with more residents. The unusual building and housing values also show why a ranking needs an explanation, not just a number.
+
+
+## Extra Credit: Interactive Graphics
+
+The map shows residents per 1,000 square feet of recorded housing. Pink areas have the highest values. Each dot in the chart is a tract, showing its number of homes and residents. Hover over a dot or map area to see its neighborhood and numbers; the matching tract lights up in both panels. Areas without a usable home count appear only on the map.
+
+```{r}
+#| label: linked-housing
+#| fig-cap: "NYC housing and population. Matching tract IDs link the map and chart for the interactive-graphics extra credit."
+# Give each tract the same ID in the map and the chart.
+density_map <- tract_data |>
+  mutate(
+    density_band = cut(people_1000sqft, breaks = c(-Inf, 1, 2, 3, 5, Inf),
+                       labels = c("Up to 1", "1 to 2", "2 to 3", "3 to 5", "Over 5")),
+    density_band = fct_na_value_to_level(density_band, "No data"),
+    tip = paste0(NTAName, ", ", borough, "\nTract: ", GEOID,
+                 "\nResidents: ", fmt(totalE), "\nRecorded homes: ", fmt(units),
+                 "\nResidents per 1,000 sq. ft.: ", fmt(people_1000sqft, 1))
+  )
+chart_data <- density_map |> st_drop_geometry() |>
+  filter(is.finite(totalE), is.finite(units), units > 0)
+
+housing_map <- ggplot(density_map) +
+  geom_sf_interactive(aes(fill = density_band, tooltip = tip, data_id = GEOID),
+                      color = NA) +
+  geom_sf_label(data = borough_labels, aes(label = BoroName),
+                fill = ink, color = "white", size = 2.7, label.size = 0) +
+  scale_fill_manual(values = c("#292e4b", "#46517b", "#498c9c", cyan, pink, "#666977"),
+                    drop = FALSE, name = "Residents per 1,000 housing sq. ft.") +
+  guides(fill = guide_legend(nrow = 2)) +
+  labs(title = "People and housing space", subtitle = "Each area is a NYC census tract") +
+  map_theme
+
+housing_chart <- ggplot(chart_data, aes(units, totalE)) +
+  geom_point_interactive(aes(tooltip = tip, data_id = GEOID),
+                         color = cyan, alpha = 0.5, size = 1.6) +
+  scale_x_continuous(labels = scales::label_comma()) +
+  scale_y_continuous(labels = scales::label_comma()) +
+  labs(title = "Homes and residents", subtitle = "Each dot is the same kind of small area",
+       x = "Recorded homes", y = "Estimated residents")
+
+# Patchwork puts the two views together; ggiraph adds linked hover details.
+girafe(ggobj = housing_map + housing_chart + plot_layout(widths = c(1, 1.15)),
+       width_svg = 12, height_svg = 6.5, bg = ink,
+       options = list(
+         opts_hover(css = "fill:#e6a0d5;stroke:#e6a0d5;stroke-width:2px;"),
+         opts_tooltip(css = "background:#191d2d;color:white;padding:8px;border-radius:4px;"),
+         opts_sizing(rescale = TRUE)
+       ))
+```
+
+The map uses housing floor space, not land area. Higher values can mean more people sharing housing, but they can also come from gaps in the building records, like the tract discussed above.
+
+
+## AI Usage Statement
+
+::: {.callout-note title="AI Usage Statement" collapse="true"}
+
+I used ChatGPT to help me with figuring out how to implement code and spot checking my code. All text was written by me and check for grammar by AI.
+
+:::
